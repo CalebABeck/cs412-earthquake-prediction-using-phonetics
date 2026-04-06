@@ -18,7 +18,6 @@ from sktime.transformations.panel.rocket import MiniRocket
 DATA_DIR = "/work/hdd/bfgc/yzhang62/kaggle"
 SEG_LEN = 150_000
 
-# ── Step 1: Load and segment training data ──────────────────────────
 
 print("Loading train.csv in chunks ...")
 t0 = time.time()
@@ -44,16 +43,13 @@ for i in range(n_segments):
     X_train_raw.append(train["acoustic_data"].values[start:end].astype(np.float32))
     y_train.append(train["time_to_failure"].values[end - 1])
 
-# sktime expects 3D array: (n_samples, n_channels, n_timepoints)
 X_train_3d = np.array(X_train_raw)[:, np.newaxis, :]
 y_train = np.array(y_train)
 print(f"  X_train shape: {X_train_3d.shape}, y_train shape: {y_train.shape}")
 
-# Free memory
 del train, X_train_raw
 import gc; gc.collect()
 
-# ── Step 2: Load test data ──────────────────────────────────────────
 
 print("\nLoading test data ...")
 t0 = time.time()
@@ -63,7 +59,6 @@ data = np.load(npz_path)
 X_test_3d = data["X_test"].astype(np.float32)[:, np.newaxis, :]
 print(f"  Loaded test from npz in {time.time()-t0:.0f}s, shape: {X_test_3d.shape}")
 
-# ── Step 3: MiniRocket feature extraction ───────────────────────────
 
 print("\nFitting MiniRocket ...")
 t0 = time.time()
@@ -96,7 +91,6 @@ else:
     np.savez(feat_path, X_train_feat=X_train_feat, X_test_feat=X_test_feat)
     print("  Saved!")
 
-# ── Step 4: Cross-validation with Ridge ─────────────────────────────
 
 print("\nCross-validation (5-fold) ...")
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -113,14 +107,13 @@ for fold, (tr_idx, va_idx) in enumerate(kf.split(X_train_feat)):
 
 print(f"  Overall CV MAE: {np.mean(fold_scores):.4f} (+/- {np.std(fold_scores):.4f})")
 
-# ── Step 5: Train final model and predict ───────────────────────────
 
 print("\nTraining final model on all data ...")
 final_model = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
 final_model.fit(X_train_feat, y_train)
 
 preds = final_model.predict(X_test_feat)
-preds = np.clip(preds, 0, None)  # time_to_failure >= 0
+preds = np.clip(preds, 0, None)  
 
 sub["time_to_failure"] = preds
 out_path = os.path.join(DATA_DIR, "submission_minirocket.csv")
