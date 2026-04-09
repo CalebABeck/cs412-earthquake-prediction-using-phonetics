@@ -15,7 +15,7 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error
 from sktime.transformations.panel.rocket import MiniRocket
 
-DATA_DIR = "/work/hdd/bfgc/yzhang62/kaggle"
+DATA_DIR = "./kaggle_data"
 SEG_LEN = 150_000
 
 
@@ -92,6 +92,34 @@ else:
     print("  Saved!")
 
 
+print("\nLoading Parselmouth features ...")
+gemaps_path = os.path.join(DATA_DIR, "gemaps_parselmouth_features.npz")
+using_gemaps = False
+if os.path.exists(gemaps_path):
+    gemaps_data = np.load(gemaps_path)
+    gemaps_dict = {key: gemaps_data[key] for key in gemaps_data.files}
+
+    feature_names = sorted([k for k in gemaps_dict.keys() 
+                           if k not in ['segment_id', 'time_to_failure']])
+    
+    X_train_gemaps = np.column_stack([gemaps_dict[name] for name in feature_names])
+    print(f"  Feature names: {feature_names}")
+
+    n_minirocket_segs = X_train_feat.shape[0]
+    n_gemaps_segs = X_train_gemaps.shape[0]
+    if n_minirocket_segs != n_gemaps_segs:
+        print(f"  Warning: Segment count mismatch (MiniRocket: {n_minirocket_segs}, GeMaPS: {n_gemaps_segs})")
+        min_segs = min(n_minirocket_segs, n_gemaps_segs)
+        X_train_feat = X_train_feat[:min_segs]
+        X_train_gemaps = X_train_gemaps[:min_segs]
+        y_train = y_train[:min_segs]
+        print(f"  Using first {min_segs} segments for both.")
+        
+    X_train_feat = np.hstack([X_train_feat, X_train_gemaps])
+    print(f"  Combined train features shape: {X_train_feat.shape}")
+    using_gemaps = True
+
+
 print("\nCross-validation (5-fold) ...")
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
 oof_preds = np.zeros(len(y_train))
@@ -111,6 +139,27 @@ print(f"  Overall CV MAE: {np.mean(fold_scores):.4f} (+/- {np.std(fold_scores):.
 print("\nTraining final model on all data ...")
 final_model = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
 final_model.fit(X_train_feat, y_train)
+
+gemaps_test_cache = os.path.join(DATA_DIR, "gemaps_parselmouth_features_test.npz")
+if using_gemaps:
+    if os.path.exists(gemaps_test_cache):
+        print(f"  Loading cached test GeMaPS features from {gemaps_test_cache} ...")
+        t0 = time.time()
+        test_gemaps_data = np.load(gemaps_test_cache)
+        gemaps_test_dict = {key: test_gemaps_data[key] for key in test_gemaps_data.files}
+        feature_names = sorted([k for k in gemaps_test_dict.keys() 
+                               if k not in ['segment_id']])
+        X_test_gemaps = np.column_stack([gemaps_test_dict[name] for name in feature_names])
+        print(f"  Loaded test GeMaPS features: {X_test_gemaps.shape} in {time.time()-t0:.0f}s")
+
+        if X_test_gemaps.shape[0] != X_test_feat.shape[0]:
+            min_segments = min(X_test_gemaps.shape[0], X_test_feat.shape[0])
+            X_test_feat = X_test_feat[:min_segments]
+            X_test_gemaps = X_test_gemaps[:min_segments]
+            print(f"  Using first {min_segments} test segments.")
+        
+        X_test_feat = np.hstack([X_test_feat, X_test_gemaps])
+        print(f"  Combined test features shape: {X_test_feat.shape}")
 
 preds = final_model.predict(X_test_feat)
 preds = np.clip(preds, 0, None)  

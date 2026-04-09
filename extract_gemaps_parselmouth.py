@@ -170,6 +170,38 @@ def extract_gemaps_features(signal, sample_rate=SAMPLE_RATE):
         'h1_a3_ratio': h1_a3_ratio,
     }
 
+def extract_test_features():
+    test_dir = os.path.join(DATA_DIR, 'test')
+    segment_features = []
+    segment_ids = []
+
+    test_files = sorted([f for f in os.listdir(test_dir) if f.endswith('.csv')])
+    print(f"Found {len(test_files)} test segment files")
+    
+    for segment_index, filename in enumerate(test_files):
+        if (segment_index + 1) % 50 == 0:
+            print(f'  Processed {segment_index + 1}/{len(test_files)} test segments...')
+        
+        csv_path = os.path.join(test_dir, filename)
+        df_segment = pd.read_csv(csv_path, dtype={"acoustic_data": np.int16})
+        signal = df_segment['acoustic_data'].values.astype(np.float64)
+        
+        features = extract_gemaps_features(signal, sample_rate=SAMPLE_RATE)
+        segment_features.append(features)
+        # Extract segment ID from filename (e.g., 'seg_00030f.csv' -> '00030f')
+        segment_ids.append(filename.replace('seg_', '').replace('.csv', ''))
+
+    df = pd.DataFrame(segment_features)
+    df.insert(0, 'segment_id', segment_ids)
+
+    output_csv_test = os.path.join(DATA_DIR, "gemaps_parselmouth_features_test.csv")
+    output_npz_test = os.path.join(DATA_DIR, "gemaps_parselmouth_features_test.npz")
+    
+    print(f'Saving test features to {output_csv_test} and {output_npz_test}...')
+    df.to_csv(output_csv_test, index=False)
+    np.savez_compressed(output_npz_test, **df.to_dict(orient='list'))
+    print(f'Done. Extracted {len(df)} test segments.')
+
 def main():
     train_csv = os.path.join(DATA_DIR, 'train.csv')
 
@@ -195,7 +227,10 @@ def main():
     print(f'Saving features to {OUTPUT_CSV} and {OUTPUT_NPZ}...')
     df.to_csv(OUTPUT_CSV, index=False)
     np.savez_compressed(OUTPUT_NPZ, **df.to_dict(orient='list'))
-    print(f'Done. Extracted {len(df)} segments.')
+    print(f'Done. Extracted {len(df)} training segments.')
+    
+    print("\nExtracting test features...")
+    extract_test_features()
 
 if __name__ == '__main__':
     main()
