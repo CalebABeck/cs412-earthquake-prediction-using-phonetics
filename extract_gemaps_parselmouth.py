@@ -1,7 +1,8 @@
 import os
-import time
 import numpy as np
 import pandas as pd
+from scipy import signal as scipy_signal
+from multiprocessing import Pool, Manager
 from parselmouth import Sound
 from parselmouth.praat import call
 
@@ -48,8 +49,9 @@ def smooth_lld(lld_values, voiced_mask=None):
             smoothed[i] = (lld_values[i - 1] + lld_values[i] + lld_values[i + 1]) / 3.0
         return smoothed
 
-def get_pitch_lld(sound, frame_interval=0.01):
-    pitch = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+def get_pitch_lld(sound, pitch=None, frame_interval=0.01):
+    if pitch is None:
+        pitch = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
     duration = sound.duration
     times = np.arange(0.0, duration, frame_interval)
     f0_values = []
@@ -117,8 +119,9 @@ def get_jitter_shimmer_lld(sound, frame_interval=0.01):
     
     return jitter_array, shimmer_array, voiced_array
 
-def get_formant_lld(sound, formant_number, frame_interval=0.01):
-    formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
+def get_formant_lld(sound, formant_number, formant=None, frame_interval=0.01):
+    if formant is None:
+        formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
     duration = sound.duration
     times = np.arange(0.0, duration, frame_interval)
     values = []
@@ -132,8 +135,9 @@ def get_formant_lld(sound, formant_number, frame_interval=0.01):
     
     return np.asarray(values, dtype=np.float64)
 
-def get_formant_bandwidth_lld(sound, formant_number, frame_interval=0.01):
-    formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
+def get_formant_bandwidth_lld(sound, formant_number, formant=None, frame_interval=0.01):
+    if formant is None:
+        formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
     duration = sound.duration
     times = np.arange(0.0, duration, frame_interval)
     values = []
@@ -216,21 +220,39 @@ def get_hnr_lld(sound, frame_interval=0.01):
         n_frames = int(duration / frame_interval) + 1
         return np.zeros(n_frames, dtype=np.float64)
 
-def get_spectral_features_lld(sound, frame_interval=0.01):
+def get_spectral_features_lld(sound, spectrum=None, pitch=None, formant=None, frame_interval=0.01):
+    """Extract spectral features with cached objects and optimized time-loop."""
     sample_rate = sound.sampling_frequency
     duration = sound.duration
-    formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
-    pitch = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+    if formant is None:
+        formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
+    if pitch is None:
+        pitch = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
     
     times = np.arange(0.0, duration, frame_interval)
     
     # Compute spectrum once (for whole signal)
-    freqs, power = spectral_energy_power(sound)
+    if spectrum is None:
+        freqs, power = spectral_energy_power(sound)
+    else:
+        freqs, power = spectrum
     
-    alpha_ratio_lld = []
-    hammarberg_index_lld = []
-    spectral_slope_0_500_lld = []
-    spectral_slope_500_1500_lld = []
+    # Pre-compute time-independent spectral features (constant for all frames)
+    alpha = band_energy(freqs, power, 50.0, 1000.0) / np.maximum(
+        band_energy(freqs, power, 1000.0, min(5000.0, sample_rate / 2.0)), 1e-12)
+    alpha_ratio_lld = np.full(len(times), float(alpha), dtype=np.float64)
+    
+    hammarberg = band_energy(freqs, power, 0.0, 1000.0) / np.maximum(
+        band_energy(freqs, power, 1000.0, min(5000.0, sample_rate / 2.0)), 1e-12)
+    hammarberg_index_lld = np.full(len(times), float(hammarberg), dtype=np.float64)
+    
+    slope_0_500 = spectral_slope(freqs, power, 0.0, min(500.0, sample_rate / 2.0))
+    spectral_slope_0_500_lld = np.full(len(times), slope_0_500, dtype=np.float64)
+    
+    slope_500_1500 = spectral_slope(freqs, power, 500.0, min(1500.0, sample_rate / 2.0))
+    spectral_slope_500_1500_lld = np.full(len(times), slope_500_1500, dtype=np.float64)
+    
+    # Time-dependent features (require F0/formants per frame)
     f1_rel_energy_lld = []
     f2_rel_energy_lld = []
     f3_rel_energy_lld = []
@@ -238,24 +260,7 @@ def get_spectral_features_lld(sound, frame_interval=0.01):
     h1_a3_ratio_lld = []
     
     for t in times:
-        # Alpha ratio
-        alpha = band_energy(freqs, power, 50.0, 1000.0) / np.maximum(
-            band_energy(freqs, power, 1000.0, min(5000.0, sample_rate / 2.0)), 1e-12)
-        alpha_ratio_lld.append(float(alpha))
-        
-        # Hammarberg index
-        hammarberg = band_energy(freqs, power, 0.0, 1000.0) / np.maximum(
-            band_energy(freqs, power, 1000.0, min(5000.0, sample_rate / 2.0)), 1e-12)
-        hammarberg_index_lld.append(float(hammarberg))
-        
-        # Spectral slopes
-        slope_0_500 = spectral_slope(freqs, power, 0.0, min(500.0, sample_rate / 2.0))
-        spectral_slope_0_500_lld.append(slope_0_500)
-        
-        slope_500_1500 = spectral_slope(freqs, power, 500.0, min(1500.0, sample_rate / 2.0))
-        spectral_slope_500_1500_lld.append(slope_500_1500)
-        
-        # Get F0 and formant frequencies for relative energy calculations
+        # Get F0 and formant frequencies
         try:
             f0 = call(pitch, "Get value at time", float(t), "Hertz", "Linear")
         except Exception:
@@ -302,10 +307,10 @@ def get_spectral_features_lld(sound, frame_interval=0.01):
         h1_a3 = f0_energy / np.maximum(a3_energy, 1e-12)
         h1_a3_ratio_lld.append(float(h1_a3))
     
-    return (np.asarray(alpha_ratio_lld, dtype=np.float64),
-            np.asarray(hammarberg_index_lld, dtype=np.float64),
-            np.asarray(spectral_slope_0_500_lld, dtype=np.float64),
-            np.asarray(spectral_slope_500_1500_lld, dtype=np.float64),
+    return (alpha_ratio_lld,
+            hammarberg_index_lld,
+            spectral_slope_0_500_lld,
+            spectral_slope_500_1500_lld,
             np.asarray(f1_rel_energy_lld, dtype=np.float64),
             np.asarray(f2_rel_energy_lld, dtype=np.float64),
             np.asarray(f3_rel_energy_lld, dtype=np.float64),
@@ -346,8 +351,12 @@ def extract_gemaps_features(signal, sample_rate=SAMPLE_RATE):
     
     frame_interval = 0.01  #10ms frames
     
+    pitch = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+    formant = sound.to_formant_burg(0.01, 5, MAX_FORMANT, 0.025, 50)
+    spectrum = spectral_energy_power(sound)
+    
     # 1. Pitch (semitone)
-    f0_lld, f0_voiced = get_pitch_lld(sound, frame_interval)
+    f0_lld, f0_voiced = get_pitch_lld(sound, pitch=pitch, frame_interval=frame_interval)
     f0_smoothed = smooth_lld(f0_lld, voiced_mask=f0_voiced)
     f0_mean, f0_cv = get_mean_and_cv(f0_smoothed)
     
@@ -357,20 +366,20 @@ def extract_gemaps_features(signal, sample_rate=SAMPLE_RATE):
     jitter_mean, jitter_cv = get_mean_and_cv(jitter_smoothed)
     
     # 3-5. Formants (F1, F2, F3) frequency
-    f1_hz_lld = get_formant_lld(sound, 1, frame_interval)
+    f1_hz_lld = get_formant_lld(sound, 1, formant=formant, frame_interval=frame_interval)
     f1_hz_smoothed = smooth_lld(f1_hz_lld)
     f1_hz_mean, f1_hz_cv = get_mean_and_cv(f1_hz_smoothed)
     
-    f2_hz_lld = get_formant_lld(sound, 2, frame_interval)
+    f2_hz_lld = get_formant_lld(sound, 2, formant=formant, frame_interval=frame_interval)
     f2_hz_smoothed = smooth_lld(f2_hz_lld)
     f2_hz_mean, f2_hz_cv = get_mean_and_cv(f2_hz_smoothed)
     
-    f3_hz_lld = get_formant_lld(sound, 3, frame_interval)
+    f3_hz_lld = get_formant_lld(sound, 3, formant=formant, frame_interval=frame_interval)
     f3_hz_smoothed = smooth_lld(f3_hz_lld)
     f3_hz_mean, f3_hz_cv = get_mean_and_cv(f3_hz_smoothed)
     
     # 6. Formant 1 bandwidth
-    f1_bandwidth_lld = get_formant_bandwidth_lld(sound, 1, frame_interval)
+    f1_bandwidth_lld = get_formant_bandwidth_lld(sound, 1, formant=formant, frame_interval=frame_interval)
     f1_bandwidth_smoothed = smooth_lld(f1_bandwidth_lld)
     f1_bandwidth_mean, f1_bandwidth_cv = get_mean_and_cv(f1_bandwidth_smoothed)
     
@@ -391,7 +400,7 @@ def extract_gemaps_features(signal, sample_rate=SAMPLE_RATE):
     # 10-18. Spectral features
     (alpha_ratio_lld, hammarberg_index_lld, spectral_slope_0_500_lld, 
      spectral_slope_500_1500_lld, f1_rel_energy_lld, f2_rel_energy_lld, 
-     f3_rel_energy_lld, h1_h2_ratio_lld, h1_a3_ratio_lld) = get_spectral_features_lld(sound, frame_interval)
+     f3_rel_energy_lld, h1_h2_ratio_lld, h1_a3_ratio_lld) = get_spectral_features_lld(sound, spectrum=spectrum, pitch=pitch, formant=formant, frame_interval=frame_interval)
     
     alpha_ratio_smoothed = smooth_lld(alpha_ratio_lld)
     alpha_ratio_mean, alpha_ratio_cv = get_mean_and_cv(alpha_ratio_smoothed)
@@ -459,27 +468,37 @@ def extract_gemaps_features(signal, sample_rate=SAMPLE_RATE):
         'h1_a3_ratio_cv': h1_a3_ratio_cv,
     }
 
-def extract_test_features():
-    test_dir = os.path.join(DATA_DIR, 'test')
-    segment_features = []
-    segment_ids = []
+def _process_test_segment(args):
+    """Worker function for parallel processing of test segments."""
+    segment_index, filename, test_dir = args
+    csv_path = os.path.join(test_dir, filename)
+    df_segment = pd.read_csv(csv_path, dtype={"acoustic_data": np.int16})
+    signal = df_segment['acoustic_data'].values.astype(np.float64)
+    features = extract_gemaps_features(signal, sample_rate=SAMPLE_RATE)
+    segment_id = filename.replace('seg_', '').replace('.csv', '')
+    return segment_id, features
 
+def extract_test_features(num_workers=4):
+    """Extract test features using parallel processing."""
+    test_dir = os.path.join(DATA_DIR, 'test')
     test_files = sorted([f for f in os.listdir(test_dir) if f.endswith('.csv')])
     print(f"Found {len(test_files)} test segment files")
+    work_args = [(idx, fname, test_dir) for idx, fname in enumerate(test_files)]
     
-    for segment_index, filename in enumerate(test_files):
-        if (segment_index + 1) % 50 == 0:
-            print(f'  Processed {segment_index + 1}/{len(test_files)} test segments...')
-        
-        csv_path = os.path.join(test_dir, filename)
-        df_segment = pd.read_csv(csv_path, dtype={"acoustic_data": np.int16})
-        signal = df_segment['acoustic_data'].values.astype(np.float64)
-        
-        features = extract_gemaps_features(signal, sample_rate=SAMPLE_RATE)
-        segment_features.append(features)
-        # Extract segment ID from filename (e.g., 'seg_00030f.csv' -> '00030f')
-        segment_ids.append(filename.replace('seg_', '').replace('.csv', ''))
-
+    segment_features = []
+    segment_ids = []
+    
+    with Pool(processes=num_workers) as pool:
+        for segment_index, (segment_id, features) in enumerate(pool.imap_unordered(_process_test_segment, work_args)):
+            segment_ids.append(segment_id)
+            segment_features.append(features)
+            if (segment_index + 1) % 50 == 0:
+                print(f'  Processed {segment_index + 1}/{len(test_files)} test segments...')
+    
+    # Sort by segment_id to maintain order
+    sorted_data = sorted(zip(segment_ids, segment_features))
+    segment_ids, segment_features = zip(*sorted_data)
+    
     df = pd.DataFrame(segment_features)
     df.insert(0, 'segment_id', segment_ids)
 
@@ -488,25 +507,42 @@ def extract_test_features():
     
     print(f'Saving test features to {output_csv_test} and {output_npz_test}...')
     df.to_csv(output_csv_test, index=False)
-    np.savez_compressed(output_npz_test, **df.to_dict(orient='list'))
+    # Convert to dict-like format for savez_compressed
+    output_dict = {col: df[col].values for col in df.columns}
+    np.savez_compressed(output_npz_test, **output_dict)
     print(f'Done. Extracted {len(df)} test segments.')
 
-def main():
+def _process_train_segment(args):
+    """Worker function for parallel processing of training segments."""
+    segment_index, csv_path, seg_len = args
+    chunks = pd.read_csv(csv_path, skiprows=range(1, segment_index * seg_len + 1), nrows=seg_len,
+                         dtype={"acoustic_data": np.int16, "time_to_failure": np.float32})
+    signal = chunks['acoustic_data'].values.astype(np.float64)
+    features = extract_gemaps_features(signal, sample_rate=SAMPLE_RATE)
+    label = float(chunks['time_to_failure'].iloc[-1])
+    return segment_index, label, features
+
+def main(num_workers=4):
     train_csv = os.path.join(DATA_DIR, 'train.csv')
 
+    # Count total segments
+    total_rows = 629145480  # From train.csv (excluding header)
+    num_segments = (total_rows + SEG_LEN - 1) // SEG_LEN
+    print(f"Processing {num_segments} training segments with {num_workers} workers...")
+    
     segment_features = []
     segment_labels = []
     segment_ids = []
-
     for segment_index, chunk in enumerate(pd.read_csv(
             train_csv,
             dtype={"acoustic_data": np.int16, "time_to_failure": np.float32},
             chunksize=SEG_LEN)):
-        print(f'  Segment {segment_index + 1}...')
+        if (segment_index + 1) % 100 == 0:
+            print(f'  Segment {segment_index + 1}/{num_segments}...')
         signal = chunk['acoustic_data'].values.astype(np.float64)
         features = extract_gemaps_features(signal, sample_rate=SAMPLE_RATE)
         segment_features.append(features)
-        segment_labels.append(float(chunk['time_to_failure'].iat[-1]))
+        segment_labels.append(float(chunk['time_to_failure'].iloc[-1]))
         segment_ids.append(segment_index)
 
     df = pd.DataFrame(segment_features)
@@ -514,12 +550,15 @@ def main():
     df.insert(1, 'time_to_failure', segment_labels)
 
     print(f'Saving features to {OUTPUT_CSV} and {OUTPUT_NPZ}...')
-    df.to_csv(OUTPUT_CSV, index=False)
-    np.savez_compressed(OUTPUT_NPZ, **df.to_dict(orient='list'))
+    df.to_csv(OUTPUT_CSV, index=False)    # Convert to dict-like format for savez_compressed
+    output_dict = {col: df[col].values for col in df.columns}
+    np.savez_compressed(OUTPUT_NPZ, **output_dict)
     print(f'Done. Extracted {len(df)} training segments.')
     
     print("\nExtracting test features...")
-    extract_test_features()
+    extract_test_features(num_workers=num_workers)
 
 if __name__ == '__main__':
-    main()
+    import sys
+    num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4
+    main(num_workers=num_workers)
