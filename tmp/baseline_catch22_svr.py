@@ -15,7 +15,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error
 
-DATA_DIR = "/work/hdd/bfgc/yzhang62/kaggle"
+DATA_DIR = "./kaggle_data"
+FEATURE_DIR = "./features"
 SEG_LEN = 150_000
 
 DOWNSAMPLE = 10  # 150k -> 15k points
@@ -27,7 +28,7 @@ def extract_catch22(segment):
     return result["values"]
 
 
-feat_path = os.path.join(DATA_DIR, "catch22_features.npz")
+feat_path = os.path.join(FEATURE_DIR, "catch22_features.npz")
 
 if os.path.exists(feat_path):
     print(f"Loading cached features from {feat_path} ...")

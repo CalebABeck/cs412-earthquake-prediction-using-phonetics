@@ -3,7 +3,7 @@ import os, time
 import numpy as np
 import pandas as pd
 
-DATA_DIR = "/work/hdd/bfgc/yzhang62/kaggle"
+DATA_DIR = "./kaggle_data"
 test_dir = os.path.join(DATA_DIR, "test")
 sub = pd.read_csv(os.path.join(DATA_DIR, "sample_submission.csv"))
 seg_ids = sub["seg_id"].values

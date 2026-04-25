@@ -7,14 +7,15 @@ from parselmouth import Sound
 from parselmouth.praat import call
 
 DATA_DIR = "./kaggle_data"
+FEATURE_DIR = "./features"
 SEG_LEN = 150_000
 SAMPLE_RATE = 4000
 PITCH_FLOOR = 75
 PITCH_CEILING = 500
 MAX_FORMANT = 2000
 NUM_FORMANT_SAMPLES = 30
-OUTPUT_NPZ = os.path.join(DATA_DIR, "gemaps_parselmouth_features.npz")
-OUTPUT_CSV = os.path.join(DATA_DIR, "gemaps_parselmouth_features.csv")
+OUTPUT_NPZ = os.path.join(FEATURE_DIR, "gemaps_parselmouth_features.npz")
+OUTPUT_CSV = os.path.join(FEATURE_DIR, "gemaps_parselmouth_features.csv")
 
 
 def get_mean_and_cv(values):
@@ -502,8 +503,8 @@ def extract_test_features(num_workers=4):
     df = pd.DataFrame(segment_features)
     df.insert(0, 'segment_id', segment_ids)
 
-    output_csv_test = os.path.join(DATA_DIR, "gemaps_parselmouth_features_test.csv")
-    output_npz_test = os.path.join(DATA_DIR, "gemaps_parselmouth_features_test.npz")
+    output_csv_test = os.path.join(FEATURE_DIR, "gemaps_parselmouth_features_test.csv")
+    output_npz_test = os.path.join(FEATURE_DIR, "gemaps_parselmouth_features_test.npz")
     
     print(f'Saving test features to {output_csv_test} and {output_npz_test}...')
     df.to_csv(output_csv_test, index=False)
