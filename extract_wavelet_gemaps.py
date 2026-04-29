@@ -5,7 +5,7 @@ import pandas as pd
 import pywt
 from multiprocessing import Pool
 from tqdm import tqdm
-from extract_gemaps_parselmouth import extract_gemaps_features, SAMPLE_RATE, SEG_LEN
+from extract_gemaps_hybrid import extract_hybrid_features as extract_gemaps_features, SAMPLE_RATE, SEG_LEN
 
 DATA_DIR   = "./kaggle_data"
 FEATURE_DIR = "./features"
